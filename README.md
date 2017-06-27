@@ -1,5 +1,122 @@
-# CarND-Controls-MPC
-Self-Driving Car Engineer Nanodegree Program
+# Self-Driving Car Model Predictive Control
+
+## Implementation
+
+### Model
+
+The vehicle model I have used is a simple kinematic model based on the following equations. It is similar to the bicycle Model that we were taught in Lesson 12.
+
+I consider the
+- **(x, y)** coordinates
+- The orientation of the vehicle **(ψ)**
+- the current velocity magnitude **(v)**
+- Steering actuation **(δ)**
+- The throttle actuation or acceleration **(a)**
+
+So when the yaw rate is close to zero I use the following update equations.
+```
+x[t+1] = x[t] + v[t] * cos(ψ[t]) * dt
+y[t+1] = y[t] + v[t] * sin(ψ[t]) * dt
+ψ[t+1] = ψ[t] + (v[t] * δ[t] * dt) / Lf
+v[t+1] = v[t] + a[t] * dt
+```
+
+And when it has a substantial value I use a different set of equation which consider that difference.
+
+```
+ψ'[t] = (v[t] * δ) / Lf
+x[t+1] = x[t] + v[t] * (sin(ψ[t] + ψ'[t] * dt) - sin(ψ[t])) / ψ'[t]
+y[t+1] = y[t] + v[t] * (cos(ψ[t]) - cos(ψ[t] + ψ'[t] * dt)) / ψ'[t]
+```
+
+For calculating the cross track error, as I am doing all calculations in vehicle coordinates I use the **y** coordinate for corresponding to the current **x** position as the cross track error. I do this using a third order polynomial fitted to the waypoints of given by the simulator.
+
+```C++
+coeffs = polyfit(waypoint_xs, waypoint_ys, 3)
+cte = ployeval(coeffs, x) - y // x and y are zero in reference to the vehicle
+```
+
+For calculating the error in the orientation of the vehicle I also used the same third order polynomial and found the tangent to it at the position of the vehicle.
+```C++
+eψ = -atan(c1 + c2 * x + c3 * x^2) // -atan(f'(x[t))
+```
+
+For updating the cross track Error I use the following update equations.
+```C++
+cte[t+1] = f(x[t]) - y[t] + v[t] * sin(eψ) * dt // f(x) is the 3rd order polynomial function
+```
+
+For Updating the eψ I use the following equations
+```
+eψ[t+1] = ψ[t] - atan(f'(x[t])) + v[t] * δ[t] * dt / Lf
+```
+
+The initial state values **(x0, y0, ψ0, v0, cte0, eψ0)** are then fed into an optimizer along with waypoints **Ipopt**. The optimizer predict a path 7 steps into the future with dt = 0.1 using our kinematic vehicle model.
+
+The constraints on the model are as follows
+- The steering actuation is constrained between **-25** to **25** degree or (**-0.436332** to **0.436332** radians).
+- The throttle value is constrained between 1 and -1
+
+The **cost function** for the optimizer is as follows:
+```
+cost = sum(cte) +
+       sum(eψ) +
+       sum(v - 35) +
+       15 * sum(δ) +
+       15 * sum(a) +
+       1000 * sum(dδ) +
+       10 * sum(da)
+
+// Here 35 m/s is the velocity we want achieve
+```
+
+### Timestep Length and Elapsed Duration (N & dt)
+For Elapsed duration I selected **0.1 seconds** as it matched with the Latency and was giving good results on the track. A lower value wasn't giving good results on high speeds nor where higher values, it was mainly selected via trial and error
+
+For timesteps I initially started off with the values given in the quiz solution (25) but soon realized from the plot on the simulator that they were too many. Then I switched to 10-12 but still at high speeds the car was predicting too far in the horizon
+so I finally settled for **7 steps** which gave a fair and reasonable prediction into the future.
+
+### Polynomial fitting and MPC Pre-processing
+First of all I converted the waypoints given by the simulator from global coordinates into local ones in order for allowing the plotting of the waypoints and easy use of model predictive control equations. I used the following equation for transforming each waypoint coordinate.  
+
+```
+let, dx = xg - x0 // xg: global x
+let, dy = yg - y0 // yg: global y
+
+x = dx * cos(-psi) - dy * sin(-psi)
+y = dx * sin(-psi) + dy * cos(-psi)
+```
+
+A 3rd order polynomial is then fit to these waypoints
+```
+coeffs = ployfit(ptsx, ptsy, 3)
+```
+
+### Latency
+
+The latency in the model predictive control is handled by predicting the state 100 milliseconds into the future before feeding the state into the solver, this helps us incorporate latency into our system
+
+The the prediction is done using the model discussed above,
+
+```
+// yaw rate
+ψ'[t] = (v[t] * δ) / Lf
+
+// when yaw rate is close to zero
+x[t+1] = x[t] + v[t] * cos(ψ[t]) * dt
+y[t+1] = y[t] + v[t] * sin(ψ[t]) * dt
+
+// when yaw rate is substantial
+x[t+1] = x[t] + v[t] * (sin(ψ[t] + ψ'[t] * dt) - sin(ψ[t])) / ψ'[t]
+y[t+1] = y[t] + v[t] * (cos(ψ[t]) - cos(ψ[t] + ψ'[t] * dt)) / ψ'[t]
+
+ψ[t+1] = ψ[t] + (v[t] * δ[t] * dt) / Lf
+v[t+1] = v[t] + a[t] * dt
+
+// future cte and eψ
+cte[t+1] = f(x[t]) - y[t] + v[t] * sin(eψ) * dt
+eψ[t+1] = ψ[t] - atan(f'(x[t])) + v[t] * δ[t] * dt / Lf
+```
 
 ---
 
@@ -19,7 +136,7 @@ Self-Driving Car Engineer Nanodegree Program
   * Run either `install-mac.sh` or `install-ubuntu.sh`.
   * If you install from source, checkout to commit `e94b6e1`, i.e.
     ```
-    git clone https://github.com/uWebSockets/uWebSockets 
+    git clone https://github.com/uWebSockets/uWebSockets
     cd uWebSockets
     git checkout e94b6e1
     ```
@@ -31,7 +148,7 @@ Self-Driving Car Engineer Nanodegree Program
   * Mac: `brew install ipopt`
   * Linux
     * You will need a version of Ipopt 3.12.1 or higher. The version available through `apt-get` is 3.11.x. If you can get that version to work great but if not there's a script `install_ipopt.sh` that will install Ipopt. You just need to download the source from the Ipopt [releases page](https://www.coin-or.org/download/source/Ipopt/) or the [Github releases](https://github.com/coin-or/Ipopt/releases) page.
-    * Then call `install_ipopt.sh` with the source directory as the first argument, ex: `bash install_ipopt.sh Ipopt-3.12.1`. 
+    * Then call `install_ipopt.sh` with the source directory as the first argument, ex: `bash install_ipopt.sh Ipopt-3.12.1`.
   * Windows: TODO. If you can use the Linux subsystem and follow the Linux instructions.
 * [CppAD](https://www.coin-or.org/CppAD/)
   * Mac: `brew install cppad`
